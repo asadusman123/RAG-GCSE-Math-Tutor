@@ -3,6 +3,8 @@ pytest>=8.0
 numpy>=1.26
 faiss-cpu>=1.8
 sentence-transformers>=3.0
+python-dotenv>=1.0
+google-genai>=1.0
 
 # Only needed to (re)generate vision transcriptions (transcribe_pdf):
 # pymupdf>=1.24
