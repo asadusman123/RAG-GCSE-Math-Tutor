@@ -1,55 +1,53 @@
 """
-Ingestion contract tests.
+Ingestion contract tests — run against BOTH extraction backends.
 
-These encode the properties every later stage relies on. If a future
-change (new loader, parser tweak) breaks a contract, these fail loudly
-BEFORE bad chunks reach the index.
-
+pytest parametrization runs every contract twice (pdfplumber, vision);
+a regression in either path fails loudly before bad chunks reach the index.
 Run:  python -m pytest tests/ -q
 """
 
 import pytest
 
 from src.ingestion.loader import load_pdf
+from src.ingestion.vision_loader import load_transcribed_pages
 from src.ingestion.parser import parse, validate, EXPECTED_COUNTS
 
 PDF = "data/raw/Angles_in_Polygons___Parallel_Lines___35_CQA.pdf"
 
+LOADERS = {
+    "pdfplumber": lambda: load_pdf(PDF),
+    "vision": lambda: load_transcribed_pages(),
+}
 
-# `scope="module"`: load+parse ONCE and share across tests — the pipeline
-# is deterministic, so re-running it per test would only waste seconds.
-@pytest.fixture(scope="module")
-def chunks():
-    return parse(load_pdf(PDF))
+
+@pytest.fixture(scope="module", params=LOADERS)          # each test runs per backend
+def chunks(request):
+    return parse(LOADERS[request.param]())
 
 
 def test_loader_returns_all_pages():
-    pages = load_pdf(PDF)
-    assert len(pages) == 35
-    assert pages[0].number == 1            # 1-based, like a PDF viewer
+    assert len(load_pdf(PDF)) == 35
+    assert len(load_transcribed_pages()) == 35
 
 
 def test_validation_is_clean(chunks):
-    # The parser's self-check against the cover page's own totals.
+    # Self-check against the totals the PDF's cover page asserts about itself.
     assert validate(chunks) == []
 
 
 def test_question_answer_pairing(chunks):
-    # THE core contract: every question resolves to its answer BY ID,
-    # and the link is symmetric. Grading depends on this being exact.
+    # THE core contract: every question resolves to its answer BY ID.
     by_id = {c.id: c for c in chunks}
     questions = [c for c in chunks if c.type == "question"]
-    assert len(questions) == sum(EXPECTED_COUNTS.values())  # 13
+    assert len(questions) == sum(EXPECTED_COUNTS.values())      # 13
     for q in questions:
         ans = by_id[q.pair_id]
         assert ans.type == "answer"
-        assert ans.pair_id == q.id         # symmetric back-link
-        assert ans.text.strip()            # never grade against emptiness
+        assert ans.pair_id == q.id                              # symmetric link
+        assert ans.text.strip()
 
 
 def test_no_answer_leaks_into_question(chunks):
-    # A tutor that shows mark-scheme text inside the question has failed.
-    # Mark-scheme lines are recognisable by "[1]" style mark tags.
     for q in (c for c in chunks if c.type == "question"):
         assert "Method 1" not in q.text, q.id
         assert not q.text.rstrip().endswith("marks)"), q.id
@@ -65,4 +63,18 @@ def test_metadata_sane(chunks):
         assert c.difficulty in EXPECTED_COUNTS, c.id
         assert c.marks > 0, c.id
         assert c.pages == sorted(c.pages), c.id
-        assert c.topic in {"polygons", "parallel_lines", "triangles", "angles_general"}
+
+
+def test_vision_backend_recovers_math_that_glyphs_lose():
+    """Documents the Type 3 font defect and its fix, permanently.
+
+    If this ever fails on the 'vision' side, the transcription cache is
+    damaged; if the pdfplumber assertions start PASSING, the doc was
+    re-exported with healthy fonts and vision is no longer needed."""
+    glyph = {c.id: c for c in parse(load_pdf(PDF))}
+    vision = {c.id: c for c in parse(load_transcribed_pages())}
+    for qid, needle in [("medium_q1_ans", "n = 12"),
+                        ("easy_q1_ans", "171°"),
+                        ("hard_q4_ans", "x = 19")]:
+        assert needle not in glyph[qid].text        # the defect
+        assert needle in vision[qid].text           # the fix

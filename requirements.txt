@@ -1,2 +1,6 @@
 pdfplumber>=0.11
 pytest>=8.0
+
+# Only needed to (re)generate vision transcriptions (transcribe_pdf):
+# pymupdf>=1.24
+# anthropic>=0.40
