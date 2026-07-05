@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG Tutor</title>
+<style>
+  /* ---- design tokens: slate + warm amber "grader's pen" accent -------- */
+  :root {
+    --bg: #0f1420;            /* deep slate, not pure black */
+    --surface: #171d2b;
+    --surface-2: #1e2536;
+    --line: #2a3348;
+    --ink: #e8ecf4;
+    --ink-soft: #9aa6be;
+    --accent: #f5a524;        /* warm amber — a marker/pen, not acid green */
+    --accent-soft: #f5a52422;
+    --good: #4ade80;
+    --bad: #f87171;
+    --radius: 14px;
+    --font: 'Segoe UI', system-ui, -apple-system, sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: radial-gradient(1200px 600px at 70% -10%, #1a2740 0%, transparent 60%), var(--bg);
+    color: var(--ink); font-family: var(--font);
+    min-height: 100vh; line-height: 1.5;
+    display: flex; flex-direction: column; align-items: center;
+    padding: 32px 20px;
+  }
+  header { width: 100%; max-width: 760px; margin-bottom: 20px; }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand .dot { width: 10px; height: 10px; border-radius: 50%;
+    background: var(--accent); box-shadow: 0 0 14px var(--accent); }
+  .brand h1 { font-size: 1.15rem; font-weight: 600; letter-spacing: .3px; }
+  .brand .sub { color: var(--ink-soft); font-size: .82rem; margin-left: auto; }
+
+  main { width: 100%; max-width: 760px; display: flex; flex-direction: column; gap: 16px; }
+
+  /* ---- mode bar ------------------------------------------------------- */
+  .controls { display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 12px; }
+  .controls label { color: var(--ink-soft); font-size: .8rem; margin-right: 2px; }
+  select, .btn {
+    background: var(--surface-2); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 9px; padding: 8px 12px; font-size: .85rem; font-family: var(--font);
+    cursor: pointer; transition: border-color .15s, background .15s;
+  }
+  select:hover, .btn:hover { border-color: var(--accent); }
+  .btn-primary { background: var(--accent); color: #1a1200; border-color: var(--accent);
+    font-weight: 600; }
+  .btn-primary:hover { filter: brightness(1.08); }
+  .btn:disabled { opacity: .5; cursor: not-allowed; }
+
+  /* ---- question card -------------------------------------------------- */
+  .card { background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 22px; }
+  .meta { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+  .tag { font-size: .72rem; padding: 3px 10px; border-radius: 20px;
+    background: var(--surface-2); color: var(--ink-soft); border: 1px solid var(--line); }
+  .tag.difficulty { color: var(--accent); border-color: var(--accent-soft); background: var(--accent-soft); }
+  .diagram { display: none; margin-bottom: 16px; text-align: center; }
+  .diagram.show { display: block; }
+  /* white plate so black SVG line-art reads on the dark theme */
+  .diagram .plate { display: inline-block; background: #f6f7fb; border-radius: 10px;
+    padding: 12px; border: 1px solid var(--line); }
+  .diagram svg { width: 260px; height: 260px; display: block; }
+  .diagram .cap { font-size: .72rem; color: var(--ink-soft); margin-top: 6px; }
+  .question-text { font-size: 1.05rem; white-space: pre-wrap; margin-bottom: 18px; }
+  textarea {
+    width: 100%; min-height: 110px; resize: vertical;
+    background: var(--bg); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 10px; padding: 12px; font-size: .95rem; font-family: var(--font);
+  }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  .actions { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+
+  /* ---- result reveal (the signature animated moment) ------------------ */
+  .result { border-radius: var(--radius); border: 1px solid var(--line);
+    background: var(--surface); overflow: hidden;
+    max-height: 0; opacity: 0; transition: max-height .5s ease, opacity .4s ease; }
+  .result.show { max-height: 1200px; opacity: 1; }
+  .score-band { display: flex; align-items: baseline; gap: 12px;
+    padding: 20px 22px; border-bottom: 1px solid var(--line);
+    background: linear-gradient(90deg, var(--accent-soft), transparent); }
+  .score-num { font-size: 2.6rem; font-weight: 700; color: var(--accent);
+    font-variant-numeric: tabular-nums; }
+  .score-max { font-size: 1.2rem; color: var(--ink-soft); }
+  .score-label { margin-left: auto; font-size: .85rem; color: var(--ink-soft); }
+  .breakdown { padding: 8px 22px 20px; }
+  .point { display: flex; gap: 10px; padding: 8px 0; font-size: .9rem;
+    opacity: 0; transform: translateY(6px); animation: rise .4s forwards; }
+  @keyframes rise { to { opacity: 1; transform: translateY(0); } }
+  .point .mark { flex-shrink: 0; font-weight: 700; }
+  .point.good .mark { color: var(--good); }
+  .point.bad .mark { color: var(--bad); }
+  .section-h { font-size: .72rem; text-transform: uppercase; letter-spacing: .6px;
+    color: var(--ink-soft); margin: 14px 0 4px; }
+  .hint, .why { padding: 12px 22px; font-size: .88rem; border-top: 1px solid var(--line); }
+  .hint { color: var(--accent); background: var(--accent-soft); }
+  .why { color: var(--ink-soft); }
+
+  .progress-bar { font-size: .8rem; color: var(--ink-soft); white-space: pre-wrap;
+    background: var(--surface); border: 1px solid var(--line);
+    border-radius: var(--radius); padding: 12px 16px; }
+  .loading { display: none; color: var(--accent); font-size: .85rem; padding: 4px; }
+  .loading.show { display: block; }
+  .mark-scheme { white-space: pre-wrap; font-size: .85rem; color: var(--ink-soft);
+    padding: 16px 22px; border-top: 1px solid var(--line); font-family: ui-monospace, monospace; }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+</head>
+<body>
+  <header>
+    <div class="brand">
+      <span class="dot"></span>
+      <h1>RAG Tutor</h1>
+      <span class="sub">grounded grading from your own mark schemes</span>
+    </div>
+  </header>
+
+  <main>
+    <div class="controls">
+      <label>Mode</label>
+      <select id="mode">
+        <option value="random">Random</option>
+        <option value="sequential">Sequential</option>
+        <option value="topic">By topic</option>
+        <option value="difficulty">By difficulty</option>
+      </select>
+      <select id="topic" style="display:none"></select>
+      <select id="difficulty" style="display:none"></select>
+      <button class="btn btn-primary" id="next-btn">Get a question</button>
+    </div>
+
+    <div class="card" id="question-card" style="display:none">
+      <div class="meta" id="meta"></div>
+      <div class="diagram" id="diagram"></div>
+      <div class="question-text" id="question-text"></div>
+      <textarea id="answer" placeholder="Type your answer here..."></textarea>
+      <div class="actions">
+        <button class="btn btn-primary" id="grade-btn">Submit for grading</button>
+        <button class="btn" id="reveal-btn">Show mark scheme</button>
+        <button class="btn" id="skip-btn">Skip</button>
+        <span class="loading" id="loading">Grading against the mark scheme…</span>
+      </div>
+    </div>
+
+    <div class="result" id="result"></div>
+    <div class="progress-bar" id="progress" style="display:none"></div>
+  </main>
+
+<script>
+const $ = id => document.getElementById(id);
+let current = null;   // current question object
+
+// ---- populate mode menus from the backend ----------------------------
+async function loadMeta() {
+  const m = await fetch('/api/meta').then(r => r.json());
+  $('topic').innerHTML = m.topics.map(t => `<option value="${t}">${t}</option>`).join('');
+  $('difficulty').innerHTML = m.difficulties.map(d => `<option value="${d}">${d}</option>`).join('');
+}
+$('mode').onchange = () => {
+  $('topic').style.display = $('mode').value === 'topic' ? '' : 'none';
+  $('difficulty').style.display = $('mode').value === 'difficulty' ? '' : 'none';
+};
+
+// ---- fetch next question ---------------------------------------------
+async function nextQuestion() {
+  $('result').className = 'result';           // hide old result
+  $('answer').value = '';
+  const params = new URLSearchParams({ mode: $('mode').value });
+  if ($('mode').value === 'topic') params.set('topic', $('topic').value);
+  if ($('mode').value === 'difficulty') params.set('difficulty', $('difficulty').value);
+  const q = await fetch('/api/question?' + params).then(r => r.json());
+  if (q.done) {
+    $('question-card').style.display = 'none';
+    $('result').className = 'result show';
+    $('result').innerHTML = '<div class="why">No more questions in this mode. Nicely done.</div>';
+    return;
+  }
+  current = q;
+  $('meta').innerHTML =
+    `<span class="tag difficulty">${q.difficulty}</span>` +
+    `<span class="tag">${q.topic}</span><span class="tag">${q.marks} mark(s)</span>`;
+  // Diagram: show the rendered SVG (if any) on a light plate. The full
+  // description stays in the question text below — the SVG is an aid, and
+  // the authoritative description is always visible.
+  if (q.diagram_svg) {
+    $('diagram').innerHTML =
+      `<div class="plate">${q.diagram_svg}</div>` +
+      `<div class="cap">Auto-generated diagram — refer to the description below for exact detail</div>`;
+    $('diagram').className = 'diagram show';
+  } else {
+    $('diagram').className = 'diagram';
+    $('diagram').innerHTML = '';
+  }
+  $('question-text').textContent = q.text;
+  $('question-card').style.display = '';
+}
+
+// ---- animated score count-up (the signature moment) ------------------
+function animateScore(el, target) {
+  let n = 0;
+  const step = () => { el.textContent = n; if (n < target) { n++; setTimeout(step, 180); } };
+  step();
+}
+
+// ---- grade the answer -------------------------------------------------
+async function grade() {
+  if (!current || !$('answer').value.trim()) return;
+  $('loading').className = 'loading show';
+  $('grade-btn').disabled = true;
+  try {
+    const ev = await fetch('/api/grade', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ question_id: current.id, answer: $('answer').value })
+    }).then(r => { if (!r.ok) throw new Error('grading failed'); return r.json(); });
+
+    let html = `<div class="score-band">
+        <span class="score-num" id="sc">0</span>
+        <span class="score-max">/ ${ev.max_marks}</span>
+        <span class="score-label">graded from the official mark scheme</span>
+      </div><div class="breakdown">`;
+    let delay = 0.15;
+    if (ev.correct_points.length) {
+      html += '<div class="section-h">What you got right</div>';
+      ev.correct_points.forEach(p => {
+        html += `<div class="point good" style="animation-delay:${delay}s"><span class="mark">+</span><span>${p}</span></div>`;
+        delay += 0.12;
+      });
+    }
+    if (ev.missed_points.length) {
+      html += '<div class="section-h">What was missing</div>';
+      ev.missed_points.forEach(p => {
+        html += `<div class="point bad" style="animation-delay:${delay}s"><span class="mark">–</span><span>${p}</span></div>`;
+        delay += 0.12;
+      });
+    }
+    html += '</div>';
+    if (ev.hint) html += `<div class="hint">Hint — ${ev.hint}</div>`;
+    if (ev.explanation) html += `<div class="why">${ev.explanation}</div>`;
+    $('result').innerHTML = html;
+    $('result').className = 'result show';
+    animateScore($('sc'), ev.score);
+    $('progress').style.display = '';
+    $('progress').textContent = ev.progress;
+  } catch (e) {
+    $('result').innerHTML = '<div class="why">Grading failed — check the server and your API key, then try again.</div>';
+    $('result').className = 'result show';
+  } finally {
+    $('loading').className = 'loading';
+    $('grade-btn').disabled = false;
+  }
+}
+
+async function reveal() {
+  if (!current) return;
+  const r = await fetch('/api/reveal?question_id=' + current.id).then(r => r.json());
+  $('result').innerHTML = '<div class="section-h" style="padding:16px 22px 0">Official mark scheme</div>'
+    + '<div class="mark-scheme">' + r.mark_scheme + '</div>';
+  $('result').className = 'result show';
+}
+
+$('next-btn').onclick = nextQuestion;
+$('grade-btn').onclick = grade;
+$('reveal-btn').onclick = reveal;
+$('skip-btn').onclick = nextQuestion;
+$('answer').addEventListener('keydown', e => {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) grade();   // Ctrl+Enter submits
+});
+loadMeta();
+</script>
+</body>
+</html>
