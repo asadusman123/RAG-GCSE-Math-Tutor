@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 .venv/
 .pytest_cache/
+try-gemini.py
+data/interim/diagrams/
