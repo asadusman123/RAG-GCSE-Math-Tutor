@@ -59,7 +59,20 @@ def test_reveal_returns_mark_scheme():
 def test_bad_mode_is_400():
     assert client.get("/api/question?mode=telepathy").status_code == 400
 
+
 def test_question_includes_diagram_field():
     # Every question response carries a diagram_svg key (None if no diagram).
     r = client.get("/api/question?mode=sequential").json()
-    assert "diagram_svg" in r    
+    assert "diagram_svg" in r
+
+
+def test_search_returns_a_question_or_not_found():
+    # Free-text semantic search endpoint. With the stub session's real index,
+    # a topical query returns a question chunk; result is leak-safe.
+    r = client.get("/api/search?q=interior angle of a regular polygon").json()
+    if r["found"]:
+        assert "Method 1" not in r["text"]          # never an answer chunk
+        assert r["id"] and "diagram_svg" in r
+    # an off-topic query should not fabricate a match
+    r2 = client.get("/api/search?q=how do I bake sourdough bread").json()
+    assert "found" in r2

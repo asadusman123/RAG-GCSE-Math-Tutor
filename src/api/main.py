@@ -1,11 +1,4 @@
 """
-main.py — FastAPI backend: a thin HTTP layer over the tutor's Session.
-
-The browser UI cannot run Python or hold the Gemini key safely, so this
-server sits between them: it owns the Session (and thus the key, loaded
-server-side from .env) and exposes four JSON endpoints. All tutoring logic
-still lives in Session — this file only translates HTTP <-> Session calls.
-
 Run:  uvicorn src.api.main:app --reload
       then open  http://127.0.0.1:8000
 """
@@ -97,6 +90,26 @@ def grade(req: GradeRequest):
             "missed_points": ev.missed_points,
             "hint": ev.hint, "explanation": ev.explanation,
             "progress": s.progress.summary()}
+
+
+@app.get("/api/search")
+def search(q: str):
+    """Free-text semantic search: embed the query, return the best-matching
+    QUESTION (leak protection: type==question filter). This is the endpoint
+    that actually exercises the embedding vectors at query time. Applies the
+    relevance threshold, so an off-topic query returns no match rather than
+    a forced bad one."""
+    s = get_session()
+    hits = s.retriever.search(q, k=1, filters={"type": "question"})
+    if not hits:
+        return {"found": False}
+    rec = hits[0].record
+    from src.ingestion.diagram_renderer import CACHE_DIR
+    svg_path = CACHE_DIR / f"{rec['id']}.svg"
+    svg = svg_path.read_text(encoding="utf-8") if svg_path.exists() else None
+    return {"found": True, "score": round(hits[0].score, 3),
+            "id": rec["id"], "text": rec["text"], "difficulty": rec["difficulty"],
+            "topic": rec["topic"], "marks": rec["marks"], "diagram_svg": svg}
 
 
 @app.get("/api/reveal")

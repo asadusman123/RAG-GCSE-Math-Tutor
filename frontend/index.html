@@ -134,6 +134,16 @@
       <button class="btn btn-primary" id="next-btn">Get a question</button>
     </div>
 
+    <div class="controls">
+      <label>Search</label>
+      <input id="search-box" type="text" placeholder="e.g. angles on a straight line"
+        style="flex:1; min-width:180px; background:var(--surface-2); color:var(--ink);
+        border:1px solid var(--line); border-radius:9px; padding:8px 12px;
+        font-size:.85rem; font-family:var(--font);">
+      <button class="btn btn-primary" id="search-btn">Find by meaning</button>
+      <span id="search-note" style="color:var(--ink-soft); font-size:.78rem;"></span>
+    </div>
+
     <div class="card" id="question-card" style="display:none">
       <div class="meta" id="meta"></div>
       <div class="diagram" id="diagram"></div>
@@ -166,27 +176,12 @@ $('mode').onchange = () => {
   $('difficulty').style.display = $('mode').value === 'difficulty' ? '' : 'none';
 };
 
-// ---- fetch next question ---------------------------------------------
-async function nextQuestion() {
-  $('result').className = 'result';           // hide old result
-  $('answer').value = '';
-  const params = new URLSearchParams({ mode: $('mode').value });
-  if ($('mode').value === 'topic') params.set('topic', $('topic').value);
-  if ($('mode').value === 'difficulty') params.set('difficulty', $('difficulty').value);
-  const q = await fetch('/api/question?' + params).then(r => r.json());
-  if (q.done) {
-    $('question-card').style.display = 'none';
-    $('result').className = 'result show';
-    $('result').innerHTML = '<div class="why">No more questions in this mode. Nicely done.</div>';
-    return;
-  }
+// ---- render a question object into the card (shared by next + search) -
+function showQuestion(q) {
   current = q;
   $('meta').innerHTML =
     `<span class="tag difficulty">${q.difficulty}</span>` +
     `<span class="tag">${q.topic}</span><span class="tag">${q.marks} mark(s)</span>`;
-  // Diagram: show the rendered SVG (if any) on a light plate. The full
-  // description stays in the question text below — the SVG is an aid, and
-  // the authoritative description is always visible.
   if (q.diagram_svg) {
     $('diagram').innerHTML =
       `<div class="plate">${q.diagram_svg}</div>` +
@@ -198,6 +193,40 @@ async function nextQuestion() {
   }
   $('question-text').textContent = q.text;
   $('question-card').style.display = '';
+}
+
+// ---- fetch next question ---------------------------------------------
+async function nextQuestion() {
+  $('result').className = 'result';           // hide old result
+  $('answer').value = '';
+  $('search-note').textContent = '';
+  const params = new URLSearchParams({ mode: $('mode').value });
+  if ($('mode').value === 'topic') params.set('topic', $('topic').value);
+  if ($('mode').value === 'difficulty') params.set('difficulty', $('difficulty').value);
+  const q = await fetch('/api/question?' + params).then(r => r.json());
+  if (q.done) {
+    $('question-card').style.display = 'none';
+    $('result').className = 'result show';
+    $('result').innerHTML = '<div class="why">No more questions in this mode. Nicely done.</div>';
+    return;
+  }
+  showQuestion(q);
+}
+
+// ---- semantic search: the endpoint that uses the embedding vectors ----
+async function searchByMeaning() {
+  const query = $('search-box').value.trim();
+  if (!query) return;
+  $('result').className = 'result';
+  $('answer').value = '';
+  const r = await fetch('/api/search?q=' + encodeURIComponent(query)).then(r => r.json());
+  if (!r.found) {
+    $('question-card').style.display = 'none';
+    $('search-note').textContent = "No close match — try rephrasing.";
+    return;
+  }
+  $('search-note').textContent = `matched by meaning (similarity ${r.score})`;
+  showQuestion(r);
 }
 
 // ---- animated score count-up (the signature moment) ------------------
@@ -264,6 +293,8 @@ async function reveal() {
 }
 
 $('next-btn').onclick = nextQuestion;
+$('search-btn').onclick = searchByMeaning;
+$('search-box').addEventListener('keydown', e => { if (e.key === 'Enter') searchByMeaning(); });
 $('grade-btn').onclick = grade;
 $('reveal-btn').onclick = reveal;
 $('skip-btn').onclick = nextQuestion;
