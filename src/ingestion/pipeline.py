@@ -20,7 +20,8 @@ from src.retrieval.vector_store import VectorStore
 INDEX_DIR = Path("data/index")
 
 
-def build_index(embedder=None, index_dir: str | Path = INDEX_DIR) -> VectorStore:
+def build_index(embedder=None, index_dir: str | Path = INDEX_DIR,
+                backend: str = "faiss"):
     """
     Returns the built store (handy for tests) and persists it to disk.
 
@@ -36,12 +37,28 @@ def build_index(embedder=None, index_dir: str | Path = INDEX_DIR) -> VectorStore
     # Embed the chunk TEXT; store the full chunk (text + metadata) as the
     # record, so a search hit needs no second lookup anywhere.
     vectors = embedder.embed([c.text for c in chunks])
-    store = VectorStore(dim=vectors.shape[1])
+
+    if backend == "chroma":
+        # Chroma stores vectors + documents + metadata together and persists
+        # itself — no dim argument, no save() needed.
+        from src.retrieval.chroma_store import ChromaStore
+        store = ChromaStore(index_dir)
+    else:
+        store = VectorStore(dim=vectors.shape[1])
+
     store.add(vectors, [asdict(c) for c in chunks])
     store.save(index_dir)
-    print(f"Indexed {len(chunks)} chunks -> {index_dir}/")
+    print(f"Indexed {len(chunks)} chunks -> {index_dir}/  (backend={backend})")
     return store
 
 
 if __name__ == "__main__":
-    build_index()
+    import argparse
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--chroma", action="store_true",
+                    help="build a ChromaDB index instead of FAISS")
+    args = ap.parse_args()
+    if args.chroma:
+        build_index(index_dir="data/chroma", backend="chroma")
+    else:
+        build_index()

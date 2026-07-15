@@ -24,16 +24,19 @@ app = FastAPI(title="RAG Tutor")
 # startup, not per request. USE_STUB lets you demo with no API cost/key.
 _USE_STUB = os.environ.get("TUTOR_STUB") == "1"
 _session: Session | None = None
-
+# Backend is env-driven, like TUTOR_STUB — flip without editing code.
+# TUTOR_BACKEND=chroma  -> ChromaDB at data/chroma
+# (unset)               -> FAISS at data/index  (default)
+_BACKEND = os.environ.get("TUTOR_BACKEND", "faiss")
+_INDEX_DIR = "data/chroma" if _BACKEND == "chroma" else "data/index"
 
 def get_session() -> Session:
     global _session
     if _session is None:
-        retriever = Retriever()
+        retriever = Retriever(index_dir=_INDEX_DIR, backend=_BACKEND)
         evaluator = StubEvaluator() if _USE_STUB else GeminiEvaluator()
         _session = Session(retriever, evaluator)
     return _session
-
 
 # --- request/response schemas (FastAPI validates these automatically) ---
 class GradeRequest(BaseModel):

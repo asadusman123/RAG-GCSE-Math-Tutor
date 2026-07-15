@@ -25,6 +25,17 @@ from src.retrieval.vector_store import VectorStore
 DEFAULT_MIN_SCORE = 0.30
 
 
+def _to_chroma_where(filters: dict | None) -> dict | None:
+    """Translate our simple {k: v} filters into Chroma's `where` syntax.
+    Chroma needs an explicit $and for two or more conditions — a real API
+    quirk worth knowing."""
+    if not filters:
+        return None
+    if len(filters) == 1:
+        return dict(filters)
+    return {"$and": [{k: v} for k, v in filters.items()]}
+
+
 @dataclass
 class Hit:
     """One retrieval result: the chunk record plus its cosine score."""
@@ -42,14 +53,29 @@ class Hit:
 
 class Retriever:
     def __init__(self, index_dir: str = "data/index", embedder=None,
-                 min_score: float = DEFAULT_MIN_SCORE):
+                 min_score: float = DEFAULT_MIN_SCORE, backend: str = "faiss",
+                 reranker=None, rerank_pool: int = 20):
         # Load the persisted index once; hold the embedder once (MiniLM
         # costs ~2s to load, so we never reload it per query).
-        self.store = VectorStore.load(index_dir)
+        # backend="chroma" swaps the store for ChromaDB. Nothing else in this
+        # class changes — that is the point of keeping the store boundary thin.
+        self.backend = backend
+        # STAGE 2 (optional): a cross-encoder that re-orders the shortlist.
+        # rerank_pool = how wide a net stage 1 casts before re-ranking. Wider
+        # pool = better recall for stage 2 to work with, at more compute.
+        self.reranker = reranker
+        self.rerank_pool = rerank_pool
+        if backend == "chroma":
+            from src.retrieval.chroma_store import ChromaStore
+            self.store = ChromaStore.load(index_dir)
+        else:
+            self.store = VectorStore.load(index_dir)
         self.embedder = embedder or get_embedder("auto")
         self.min_score = min_score
         # id -> record, for O(1) exact lookups (answer-by-pair_id).
-        self._by_id = {r["id"]: r for r in self.store.records}
+        records = (self.store.all_records() if backend == "chroma"
+                   else self.store.records)
+        self._by_id = {r["id"]: r for r in records}
 
     # ---------------------------------------------------------------- helpers
     def _embed(self, text: str) -> np.ndarray:
@@ -77,7 +103,31 @@ class Retriever:
         must fetch extra to still have k survivors. Slack is a safety
         margin; pre_search() below avoids the guessing entirely.
         """
+        # Two-stage retrieval: when a re-ranker is attached, stage 1 fetches a
+        # WIDE pool (recall), stage 2 re-orders it (precision), then we cut to k.
+        if self.reranker is not None:
+            pool = self._retrieve(query, k=self.rerank_pool, filters=filters,
+                                  apply_threshold=apply_threshold)
+            return self.reranker.rerank(query, pool, top_k=k)
+        return self._retrieve(query, k=k, filters=filters,
+                              apply_threshold=apply_threshold)
+
+    def _retrieve(self, query: str, k: int, filters: dict | None,
+                  apply_threshold: bool) -> list[Hit]:
+        """STAGE 1 only: vector search + metadata filtering (no re-ranking)."""
         query_vector = self._embed(query)
+
+        if self.backend == "chroma":
+            # NATIVE PRE-FILTER: Chroma restricts the search space before
+            # searching, so k results always come from the allowed set — no
+            # over-fetching, no guessing at slack. This is the capability
+            # FAISS lacks and the main reason to use a vector DB.
+            raw = self.store.search(query_vector, k=k,
+                                    where=_to_chroma_where(filters))
+            return [Hit(score=s, record=r) for s, r in raw
+                    if not apply_threshold or s >= self.min_score]
+
+        # FAISS path: POST-FILTER — over-fetch, then drop disallowed rows.
         over_k = max(15, k * 5)                       # generous margin
         raw = self.store.search(query_vector, k=over_k)
 
@@ -105,6 +155,12 @@ class Retriever:
         Because stored vectors are unit-length, cosine == dot product, so
         ranking is a single matrix-vector multiply.
         """
+        if self.backend == "chroma":
+            # Chroma pre-filters natively, so the hand-rolled workaround
+            # below is unnecessary — search() IS pre-filtered.
+            return self.search(query, k=k, filters=filters,
+                               apply_threshold=apply_threshold)
+
         query_vector = self._embed(query)
         # Indices of rows allowed through the filter.
         allowed = [i for i, r in enumerate(self.store.records)
@@ -150,4 +206,6 @@ class Retriever:
         base = {"type": "question"}
         if filters:
             base.update(filters)
+        if self.backend == "chroma":
+            return self.store.all_records(where=_to_chroma_where(base))
         return [r for r in self.store.records if self._passes(r, base)]

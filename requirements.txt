@@ -10,3 +10,4 @@ uvicorn[standard]>=0.29
 # Only needed to (re)generate vision transcriptions (transcribe_pdf):
 # pymupdf>=1.24
 # anthropic>=0.40
+chromadb>=0.5
